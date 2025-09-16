@@ -25,13 +25,10 @@ func (gc *GitHubClient) FetchPullRequests(owner, repo string, filter *PRFilter, 
 		"--state", "merged",
 		"--json", "number,title,state,mergedAt,createdAt,author")
 
-	// Set limit based on filter or use no limit
+	// Set limit if provided
 	if filter != nil && filter.Limit > 0 {
 		cmd.Args = append(cmd.Args, "--limit", strconv.Itoa(filter.Limit))
 	}
-	// If no limit specified, GitHub CLI will fetch all PRs
-
-	// Note: We'll filter by merge date in code after fetching, not in the CLI command
 
 	// Execute the command
 	output, err := cmd.Output()

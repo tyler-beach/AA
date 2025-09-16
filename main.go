@@ -262,10 +262,13 @@ func outputResults(allPRs []struct {
 		return
 	}
 
-	// Group PRs by repository
+	// Group PRs by repository - only include merged PRs
 	repoPRs := make(map[string][]PullRequest)
 	for _, item := range allPRs {
-		repoPRs[item.Repository] = append(repoPRs[item.Repository], item.PR)
+		// Only include PRs that are actually merged (have a merge date)
+		if item.PR.MergedAt != nil && item.PR.State == "MERGED" {
+			repoPRs[item.Repository] = append(repoPRs[item.Repository], item.PR)
+		}
 	}
 
 	// Generate repository sections
@@ -366,13 +369,14 @@ func outputXLSX(allPRs []struct {
 	// Create a new Excel file
 	file := xlsx.NewFile()
 	
-	// Group PRs by repository with vertical info
+	// Group PRs by repository with vertical info - only include merged PRs
 	repoPRs := make(map[string]struct {
 		Verticals []string
 		PRs       []PullRequest
 	})
 	for _, item := range allPRs {
-		if item.PR.MergedAt != nil {
+		// Only include PRs that are actually merged (have a merge date)
+		if item.PR.MergedAt != nil && item.PR.State == "MERGED" {
 			repoData := repoPRs[item.Repository]
 			repoData.Verticals = item.Verticals
 			repoData.PRs = append(repoData.PRs, item.PR)
