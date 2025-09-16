@@ -1,0 +1,8 @@
+# Configuration for repositories in a single organization
+organization: "skyeshanohan"
+repositories:
+  - "repo1"
+  - "repo2"
+  - "repo3"
+  - "repo4"
+  - "repo5"

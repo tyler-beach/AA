@@ -1,0 +1,11 @@
+repositories:
+  - owner: "skyeshanohan"
+    name: "repo1"
+  - owner: "skyeshanohan"
+    name: "repo2"
+  - owner: "skyeshanohan"
+    name: "repo3"
+  - owner: "skyeshanohan"
+    name: "repo4"
+  - owner: "skyeshanohan"
+    name: "repo5"
