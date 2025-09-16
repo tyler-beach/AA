@@ -17,68 +17,44 @@ func NewGitHubClient() *GitHubClient {
 	return &GitHubClient{}
 }
 
-// FetchPullRequests fetches pull requests for a repository using GitHub CLI with pagination
+// FetchPullRequests fetches pull requests for a repository using GitHub CLI
 func (gc *GitHubClient) FetchPullRequests(owner, repo string, filter *PRFilter, workerConfig *WorkerConfig) ([]PullRequest, error) {
-	var allPRs []PullRequest
-	page := 1
-	pageSize := workerConfig.PageSize
-	if pageSize <= 0 {
-		pageSize = 100 // Default page size
+	// Build the GitHub CLI command
+	cmd := exec.Command("gh", "pr", "list", 
+		"--repo", fmt.Sprintf("%s/%s", owner, repo),
+		"--state", "merged",
+		"--json", "number,title,state,mergedAt,createdAt,author")
+
+	// Set limit based on filter or use a reasonable default
+	limit := 1000 // Default limit for GitHub CLI
+	if filter != nil && filter.Limit > 0 {
+		limit = filter.Limit
+	}
+	cmd.Args = append(cmd.Args, "--limit", strconv.Itoa(limit))
+
+	// Add date filters if provided
+	if filter != nil {
+		if filter.StartDate != nil {
+			cmd.Args = append(cmd.Args, "--created", fmt.Sprintf(">=%s", filter.StartDate.Format("2006-01-02")))
+		}
+		if filter.EndDate != nil {
+			cmd.Args = append(cmd.Args, "--created", fmt.Sprintf("<=%s", filter.EndDate.Format("2006-01-02")))
+		}
 	}
 
-	for {
-		// Build the GitHub CLI command with pagination
-		cmd := exec.Command("gh", "pr", "list", 
-			"--repo", fmt.Sprintf("%s/%s", owner, repo),
-			"--state", "all",
-			"--json", "number,title,state,merged_at,created_at",
-			"--limit", strconv.Itoa(pageSize),
-			"--page", strconv.Itoa(page))
-
-		// Add date filters if provided
-		if filter != nil {
-			if filter.StartDate != nil {
-				cmd.Args = append(cmd.Args, "--created", fmt.Sprintf(">=%s", filter.StartDate.Format("2006-01-02")))
-			}
-			if filter.EndDate != nil {
-				cmd.Args = append(cmd.Args, "--created", fmt.Sprintf("<=%s", filter.EndDate.Format("2006-01-02")))
-			}
-		}
-
-		// Execute the command
-		output, err := cmd.Output()
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch pull requests for %s/%s (page %d): %w", owner, repo, page, err)
-		}
-
-		// Parse the JSON output
-		var pagePRs []PullRequest
-		if err := json.Unmarshal(output, &pagePRs); err != nil {
-			return nil, fmt.Errorf("failed to parse pull request data for %s/%s (page %d): %w", owner, repo, page, err)
-		}
-
-		// If no PRs returned, we've reached the end
-		if len(pagePRs) == 0 {
-			break
-		}
-
-		allPRs = append(allPRs, pagePRs...)
-
-		// Check if we've reached the limit
-		if filter != nil && filter.Limit > 0 && len(allPRs) >= filter.Limit {
-			allPRs = allPRs[:filter.Limit]
-			break
-		}
-
-		// If we got fewer PRs than the page size, we've reached the end
-		if len(pagePRs) < pageSize {
-			break
-		}
-
-		page++
+	// Execute the command
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch pull requests for %s/%s: %w", owner, repo, err)
 	}
 
-	return allPRs, nil
+	// Parse the JSON output
+	var prs []PullRequest
+	if err := json.Unmarshal(output, &prs); err != nil {
+		return nil, fmt.Errorf("failed to parse pull request data for %s/%s: %w", owner, repo, err)
+	}
+
+	return prs, nil
 }
 
 // CheckGitHubCLI checks if GitHub CLI is installed and authenticated

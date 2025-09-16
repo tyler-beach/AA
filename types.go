@@ -26,8 +26,11 @@ type PullRequest struct {
 	Number int    `json:"number"`
 	Title  string `json:"title"`
 	State  string `json:"state"`
-	MergedAt *time.Time `json:"merged_at,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	MergedAt *time.Time `json:"mergedAt,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
 }
 
 // PRFilter represents filtering options for pull requests
