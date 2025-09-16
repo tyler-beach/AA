@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/tealeg/xlsx/v3"
 )
 
 var (
@@ -30,8 +32,8 @@ func main() {
 	}
 
 	rootCmd.Flags().StringVarP(&reposFile, "repos", "r", "repositories.yaml", "Path to repositories configuration file")
-	rootCmd.Flags().StringVarP(&startDate, "start", "s", "", "Start date for filtering PRs (YYYY-MM-DD format)")
-	rootCmd.Flags().StringVarP(&endDate, "end", "e", "", "End date for filtering PRs (YYYY-MM-DD format)")
+	rootCmd.Flags().StringVarP(&startDate, "start", "s", "", "Start date for filtering PRs by merge date (YYYY-MM-DD format)")
+	rootCmd.Flags().StringVarP(&endDate, "end", "e", "", "End date for filtering PRs by merge date (YYYY-MM-DD format)")
 	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "pr-analysis.md", "Output markdown file to write results (default: pr-analysis.md)")
 	rootCmd.Flags().IntVarP(&maxWorkers, "workers", "w", 10, "Maximum number of concurrent workers (default: 10 for large datasets)")
 	rootCmd.Flags().IntVarP(&maxPRsPerRepo, "max-prs", "m", 0, "Maximum PRs to fetch per repository (0 = no limit)")
@@ -51,12 +53,35 @@ func run(cmd *cobra.Command, args []string) {
 		log.Fatalf("Failed to load repositories: %v", err)
 	}
 
+	// Collect all repositories (from both direct list and verticals) and deduplicate
+	repositoryMap := make(map[string]Repository)
+	
+	// Add direct repositories
+	for _, repo := range config.Repositories {
+		key := fmt.Sprintf("%s/%s", repo.Owner, repo.Name)
+		repositoryMap[key] = repo
+	}
+	
+	// Add repositories from verticals
+	for _, vertical := range config.Verticals {
+		for _, repo := range vertical.Repositories {
+			key := fmt.Sprintf("%s/%s", repo.Owner, repo.Name)
+			repositoryMap[key] = repo
+		}
+	}
+	
+	// Convert map back to slice
+	var allRepositories []Repository
+	for _, repo := range repositoryMap {
+		allRepositories = append(allRepositories, repo)
+	}
+	
 	// Apply batch processing if specified
-	repositoriesToProcess := config.Repositories
+	repositoriesToProcess := allRepositories
 	if batchSize > 0 {
-		repositoriesToProcess = getBatchRepositories(config.Repositories, batchSize, batchNumber)
+		repositoriesToProcess = getBatchRepositories(allRepositories, batchSize, batchNumber)
 		if len(repositoriesToProcess) == 0 {
-			log.Fatalf("Batch %d is empty. Total repositories: %d, Batch size: %d", batchNumber, len(config.Repositories), batchSize)
+			log.Fatalf("Batch %d is empty. Total repositories: %d, Batch size: %d", batchNumber, len(allRepositories), batchSize)
 		}
 	}
 
@@ -91,10 +116,10 @@ func run(cmd *cobra.Command, args []string) {
 	}
 	if filter != nil {
 		if filter.StartDate != nil {
-			fmt.Printf("📅 Start date filter: %s\n", filter.StartDate.Format("2006-01-02"))
+			fmt.Printf("📅 Start merge date filter: %s\n", filter.StartDate.Format("2006-01-02"))
 		}
 		if filter.EndDate != nil {
-			fmt.Printf("📅 End date filter: %s\n", filter.EndDate.Format("2006-01-02"))
+			fmt.Printf("📅 End merge date filter: %s\n", filter.EndDate.Format("2006-01-02"))
 		}
 	}
 	if workerConfig.MaxPRsPerRepo > 0 {
@@ -110,6 +135,7 @@ func run(cmd *cobra.Command, args []string) {
 	// Process results
 	var allPRs []struct {
 		Repository string
+		Verticals  []string
 		PR         PullRequest
 	}
 
@@ -126,13 +152,18 @@ func run(cmd *cobra.Command, args []string) {
 		successCount++
 		fmt.Printf("✅ %s: Found %d pull requests\n", result.Repository, len(result.PRs))
 
+		// Find the verticals for this repository
+		verticals := findVerticalsForRepository(result.Repository, config)
+
 		// Add repository info to each PR
 		for _, pr := range result.PRs {
 			allPRs = append(allPRs, struct {
 				Repository string
+				Verticals  []string
 				PR         PullRequest
 			}{
 				Repository: result.Repository,
+				Verticals:  verticals,
 				PR:         pr,
 			})
 		}
@@ -144,6 +175,9 @@ func run(cmd *cobra.Command, args []string) {
 
 	// Output results
 	outputResults(allPRs)
+	
+	// Output XLSX
+	outputXLSX(allPRs)
 }
 
 func parseDateFilter() (*PRFilter, error) {
@@ -192,8 +226,22 @@ func getBatchRepositories(repositories []Repository, batchSize, batchNumber int)
 	return repositories[start:end]
 }
 
+// findVerticalsForRepository finds which verticals a repository belongs to
+func findVerticalsForRepository(repoName string, config *RepositoriesConfig) []string {
+	var verticals []string
+	for _, vertical := range config.Verticals {
+		for _, repo := range vertical.Repositories {
+			if fmt.Sprintf("%s/%s", repo.Owner, repo.Name) == repoName {
+				verticals = append(verticals, vertical.Name)
+			}
+		}
+	}
+	return verticals
+}
+
 func outputResults(allPRs []struct {
 	Repository string
+	Verticals  []string
 	PR         PullRequest
 }) {
 	var output *os.File
@@ -229,6 +277,7 @@ func outputResults(allPRs []struct {
 
 func generateMarkdownHeader(output *os.File, allPRs []struct {
 	Repository string
+	Verticals  []string
 	PR         PullRequest
 }) {
 	fmt.Fprintf(output, "# Merged Pull Request Analysis Report\n\n")
@@ -289,8 +338,11 @@ func generateRepositorySection(output *os.File, repo string, prs []PullRequest) 
 }
 
 func generatePRMarkdown(output *os.File, repo string, pr PullRequest) {
-	// PR number
-	fmt.Fprintf(output, "#%d", pr.Number)
+	// Create GitHub PR URL
+	prURL := fmt.Sprintf("https://github.com/%s/pull/%d", repo, pr.Number)
+	
+	// PR number with embedded URL
+	fmt.Fprintf(output, "[#%d](%s)", pr.Number, prURL)
 	
 	// Author
 	if pr.Author.Login != "" {
@@ -301,6 +353,99 @@ func generatePRMarkdown(output *os.File, repo string, pr PullRequest) {
 	fmt.Fprintf(output, " - merged %s", pr.MergedAt.Format("2006-01-02"))
 	
 	fmt.Fprintf(output, "\n")
+}
+
+func outputXLSX(allPRs []struct {
+	Repository string
+	Verticals  []string
+	PR         PullRequest
+}) {
+	// Create XLSX filename based on output file
+	xlsxFile := strings.TrimSuffix(outputFile, ".md") + ".xlsx"
+	
+	// Create a new Excel file
+	file := xlsx.NewFile()
+	
+	// Group PRs by repository with vertical info
+	repoPRs := make(map[string]struct {
+		Verticals []string
+		PRs       []PullRequest
+	})
+	for _, item := range allPRs {
+		if item.PR.MergedAt != nil {
+			repoData := repoPRs[item.Repository]
+			repoData.Verticals = item.Verticals
+			repoData.PRs = append(repoData.PRs, item.PR)
+			repoPRs[item.Repository] = repoData
+		}
+	}
+	
+	// Create a worksheet for each repository
+	for repoName, repoData := range repoPRs {
+		// Extract just the repository name (remove organization prefix)
+		repoNameOnly := repoName
+		if strings.Contains(repoName, "/") {
+			parts := strings.Split(repoName, "/")
+			repoNameOnly = parts[len(parts)-1] // Get the last part (repository name)
+		}
+		
+		// Create worksheet name with vertical prefix
+		var sheetName string
+		if len(repoData.Verticals) > 0 {
+			// Join multiple verticals with "/"
+			verticalsStr := strings.Join(repoData.Verticals, "/")
+			sheetName = fmt.Sprintf("%s - %s", verticalsStr, repoNameOnly)
+		} else {
+			sheetName = repoNameOnly
+		}
+		
+		// Clean worksheet name for Excel (Excel has restrictions)
+		sheetName = strings.ReplaceAll(sheetName, "/", "-")
+		if len(sheetName) > 31 { // Excel worksheet name limit
+			sheetName = sheetName[:31]
+		}
+		
+		sheet, err := file.AddSheet(sheetName)
+		if err != nil {
+			log.Printf("Failed to create Excel sheet for %s: %v", repoName, err)
+			continue
+		}
+		
+		// Create header row
+		headerRow := sheet.AddRow()
+		headerRow.AddCell().SetString("PR_Number")
+		headerRow.AddCell().SetString("Author")
+		headerRow.AddCell().SetString("Merge_Date")
+		
+		// Add data rows
+		for _, pr := range repoData.PRs {
+			prURL := fmt.Sprintf("https://github.com/%s/pull/%d", repoName, pr.Number)
+			author := pr.Author.Login
+			if author == "" {
+				author = "Unknown"
+			}
+			
+			// Create row
+			row := sheet.AddRow()
+			
+			// Create hyperlink cell for PR number
+			prCell := row.AddCell()
+			prCell.SetString(fmt.Sprintf("#%d", pr.Number))
+			prCell.SetHyperlink(prURL, fmt.Sprintf("#%d", pr.Number), "")
+			
+			row.AddCell().SetString(author)
+			row.AddCell().SetString(pr.MergedAt.Format("2006-01-02"))
+		}
+	}
+	
+	// Save the file
+	err := file.Save(xlsxFile)
+	if err != nil {
+		log.Printf("Failed to save Excel file: %v", err)
+		return
+	}
+	
+	fmt.Printf("📊 Excel report generated: %s\n", xlsxFile)
 }
 
 

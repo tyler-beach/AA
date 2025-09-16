@@ -1,6 +1,14 @@
-# Configuration for repositories in a single organization
+# Configuration with multiple verticals per repository
 organization: "skyeshanohan"
 repositories:
-  - "docs"
-  - "findings-manager"
-  - "public-test"
+  - name: "docs"
+    verticals:
+      - "Provider"
+      - "Payer"
+  - name: "findings-manager"
+    verticals:
+      - "Provider"
+      - "Payer"
+  - name: "public-test"
+    verticals:
+      - "Payer"

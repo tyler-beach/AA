@@ -32,15 +32,7 @@ func (gc *GitHubClient) FetchPullRequests(owner, repo string, filter *PRFilter, 
 	}
 	cmd.Args = append(cmd.Args, "--limit", strconv.Itoa(limit))
 
-	// Add date filters if provided
-	if filter != nil {
-		if filter.StartDate != nil {
-			cmd.Args = append(cmd.Args, "--created", fmt.Sprintf(">=%s", filter.StartDate.Format("2006-01-02")))
-		}
-		if filter.EndDate != nil {
-			cmd.Args = append(cmd.Args, "--created", fmt.Sprintf("<=%s", filter.EndDate.Format("2006-01-02")))
-		}
-	}
+	// Note: We'll filter by merge date in code after fetching, not in the CLI command
 
 	// Execute the command
 	output, err := cmd.Output()
@@ -52,6 +44,29 @@ func (gc *GitHubClient) FetchPullRequests(owner, repo string, filter *PRFilter, 
 	var prs []PullRequest
 	if err := json.Unmarshal(output, &prs); err != nil {
 		return nil, fmt.Errorf("failed to parse pull request data for %s/%s: %w", owner, repo, err)
+	}
+
+	// Filter by merge date if provided
+	if filter != nil && (filter.StartDate != nil || filter.EndDate != nil) {
+		var filteredPRs []PullRequest
+		for _, pr := range prs {
+			if pr.MergedAt != nil {
+				mergeDate := *pr.MergedAt
+				
+				// Check start date
+				if filter.StartDate != nil && mergeDate.Before(*filter.StartDate) {
+					continue
+				}
+				
+				// Check end date
+				if filter.EndDate != nil && mergeDate.After(*filter.EndDate) {
+					continue
+				}
+				
+				filteredPRs = append(filteredPRs, pr)
+			}
+		}
+		prs = filteredPRs
 	}
 
 	return prs, nil
